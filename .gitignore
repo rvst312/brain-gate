@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+# Pesos de modelos: no versionar (1,1 GB)
+models/
+.pytest_cache/
+.DS_Store

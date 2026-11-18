@@ -1,0 +1,18 @@
+{
+  "id": "brain-external-es",
+  "version": 3,
+  "language": "es",
+  "categories": {
+    "IBAN":      { "action": "mask", "placeholder": "[IBAN]",      "min_score": 0.9 },
+    "NIE":       { "action": "mask", "placeholder": "[NIE]",       "min_score": 0.9 },
+    "DNI":       { "action": "mask", "placeholder": "[DNI]",       "min_score": 0.9 },
+    "EMAIL":     { "action": "mask", "placeholder": "[EMAIL]",     "min_score": 0.5 },
+    "TELEFONO":  { "action": "mask", "placeholder": "[TELEFONO]",  "min_score": 0.5 },
+    "PERSONA":   { "action": "mask", "placeholder": "[PERSONA]",   "min_score": 0.5, "on_doubt": "mask" },
+    "DIRECCION": { "action": "mask", "placeholder": "[DIRECCION]", "min_score": 0.5, "on_doubt": "mask" }
+  },
+  "priority": ["IBAN", "NIE", "DNI", "EMAIL", "TELEFONO", "DIRECCION", "PERSONA"],
+  "on_doubt": "review",
+  "on_unknown_category": "mask",
+  "max_chars": 25000
+}

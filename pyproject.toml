@@ -1,0 +1,50 @@
+[project]
+name = "brain-gate"
+version = "0.1.0"
+description = "Local PII shield for AI assistants: detects and masks personal data with on-prem models before anything reaches an external LLM."
+readme = "README.md"
+authors = [
+    { name = "rvst312" }
+]
+requires-python = ">=3.12"
+license = "Apache-2.0"
+keywords = ["pii", "privacy", "anonymization", "llm", "rag", "gliner", "gdpr", "spanish", "dlp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = [
+    "fastapi>=0.163.2",
+    "httpx>=0.28.1",
+    "pydantic>=2.14.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/rvst312/brain-gate"
+Documentation = "https://github.com/rvst312/brain-gate/tree/main/docs"
+Issues = "https://github.com/rvst312/brain-gate/issues"
+
+[project.scripts]
+braingate = "brain_gate.cli:main"
+
+[project.optional-dependencies]
+gliner = ["gliner", "sentencepiece", "protobuf"]
+server = ["uvicorn"]
+
+[build-system]
+requires = ["uv_build>=0.9.30,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+markers = ["gliner: usa los pesos reales de GLiNER (se omite si no están)", "slow: ejecuta los ejemplos completos"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
