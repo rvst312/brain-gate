@@ -6,11 +6,12 @@ from .engine import Engine, MaskResult, Status
 from .gateway import Gateway, GatewayResult, HttpMasker, LocalMasker, MockProvider, Provider
 from .policy import Action, Policy, PolicyStore
 from .rules import RuleDetector
+from .vault import Vault
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Action", "Engine", "Gateway", "GatewayResult", "GlinerDetector", "HttpMasker", "LocalMasker",
-    "MaskResult", "MockProvider", "Policy", "PolicyStore", "Provider", "RuleDetector", "Status",
+    "MaskResult", "MockProvider", "Policy", "PolicyStore", "Provider", "RuleDetector", "Status", "Vault",
     "build_engine", "create_app",
 ]

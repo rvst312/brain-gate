@@ -1,6 +1,6 @@
 [project]
 name = "brain-gate"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local PII shield for AI assistants: detects and masks personal data with on-prem models before anything reaches an external LLM."
 readme = "README.md"
 authors = [

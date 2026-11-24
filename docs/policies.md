@@ -43,6 +43,26 @@ your own directory to replace them.
 | `on_doubt` | Default doubt handling. |
 | `on_unknown_category` | Action for detector categories the policy does not declare. Default `mask` (fail-safe). |
 | `max_chars` | Maximum characters per text field. Larger inputs get `413 too_large` and the gateway blocks them. |
+| `reversible` | Policy-wide default (`false`). When `true`, masked values become unique tokens that can be restored. |
+| `categories.<C>.reversible` | Per-category override of `reversible`. |
+
+## Reversible tokens
+
+With `reversible`, a masked value is replaced by `[CATEGORY_<10 hex>]` (for example `[DNI_7f3a9c2e41]`) instead of
+the fixed placeholder, and the caller keeps a table `token -> original` to rebuild the provider's answer. The same
+value always gets the same token, so the model can tell two people apart and refer back to each of them.
+
+The built-in `brain-external-es-reversible@1` is `brain-external-es@3` with `"reversible": true` at policy level and
+`"reversible": false` on `IBAN`: the account number is never restorable and still goes out as `[IBAN]`.
+
+- Tokens only appear when the caller asks for them: the gateway on the `chat` route, or `"reversible": true` on
+  `POST /v1/mask`. Everywhere else (embeddings, CLI, index masking) the fixed placeholder is used.
+- The token is `HMAC-SHA256(key, category + value)`, truncated. It is **not** a plain hash: a DNI has only 10⁸
+  possible values, so an unkeyed hash could be reversed by brute force. Without the key a token reveals nothing but
+  the category and whether two tokens refer to the same value.
+- Values are compared ignoring case and repeated whitespace; the first literal form seen is the one restored.
+- A category marked reversible means the **real value returns to whatever consumes the response** (your UI, your
+  tools). Keep categories irreversible when the answer should never contain them.
 
 ## Choosing doubt handling
 

@@ -33,6 +33,8 @@ class CategoryRule(BaseModel):
     on_doubt: Action | None = None
     # Valores literales que se conservan (p. ej. el correo público de la empresa).
     exceptions: list[str] = Field(default_factory=list)
+    # Token único reconstruible en lugar del placeholder fijo; si falta, se usa el de la política.
+    reversible: bool | None = None
 
 
 class Policy(BaseModel):
@@ -49,6 +51,8 @@ class Policy(BaseModel):
     # Detecciones de categorías no declaradas en la política.
     on_unknown_category: Action = Action.MASK
     max_chars: int = 25_000
+    # Sustituir por tokens únicos ``[CATEGORIA_<hex>]`` que permiten reconstruir el dato.
+    reversible: bool = False
 
     @property
     def ref(self) -> str:
@@ -66,6 +70,10 @@ class Policy(BaseModel):
 
     def placeholder(self, category: str) -> str:
         return self.rule(category).placeholder or f"[{category}]"
+
+    def is_reversible(self, category: str) -> bool:
+        own = self.rule(category).reversible
+        return self.reversible if own is None else own
 
     def rank(self, category: str) -> int:
         try:

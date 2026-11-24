@@ -35,6 +35,7 @@ has been processed. If anything is doubtful, broken or unsupported, the request 
 - **🔒 100% local inference.** Model weights load from disk with network disabled. Nothing is sent anywhere to detect PII.
 - **🇪🇸 Built for Spanish documents.** Validated detectors for DNI, NIE, IBAN (checksums), Spanish phones and emails, plus [GLiNER Multi PII](https://huggingface.co/urchade/gliner_multi_pii-v1) for names and addresses.
 - **🚧 Fail-closed gateway.** Masks system prompt, history, retrieved context, tool calls and tool results while keeping the request structure. Review pending, detector down, timeout, attachment, unknown field → blocked.
+- **🔁 Data reconstruction.** Optionally send unique keyed tokens (`[DNI_3b1e2db644]`) instead of fixed placeholders and get the provider's answer back with the real values. The lookup table lives in memory for one request.
 - **📜 Versioned policies.** Categories, placeholders, thresholds, exceptions, overlap priority and doubt handling are config, not code. Every result records `policy_version` and `detector_version`.
 - **🙊 No content in logs.** Telemetry is a whitelist of latencies, sizes, counts and versions. Error responses never echo the input.
 - **🧩 Three ways to use it.** Python library, private HTTP API (`POST /v1/mask`) or CLI.
@@ -106,6 +107,21 @@ curl -s localhost:8088/v1/mask -H "Authorization: Bearer $TOKEN" -H 'content-typ
  "policy_version": "brain-external-es@3", "detector_version": "rules@1+gliner-pii@1"}
 ```
 
+### 4. Getting the real data back in the answer → [`examples/04_reversible_chat.py`](examples/04_reversible_chat.py)
+
+With a reversible policy each value leaves as a unique keyed token instead of a fixed placeholder. The model can
+tell entities apart, and the gateway rebuilds the answer (text and tool-call arguments) from an in-memory table
+that lives only for that request.
+
+```text
+sent to the provider    "…titular del DNI [DNI_3b1e2db644]. Contacto: [EMAIL_bb25739858] … IBAN [IBAN]."
+provider answers        "Envío el recordatorio a [EMAIL_bb25739858] indicando el DNI [DNI_3b1e2db644]."
+what your app receives  "Envío el recordatorio a maria.lopez@example.com indicando el DNI 12345678Z."
+```
+
+Reversibility is set per category in the policy; here `IBAN` stays irreversible. See
+[reversible tokens](docs/policies.md#reversible-tokens).
+
 ## How it works
 
 ```mermaid
@@ -127,7 +143,7 @@ flowchart LR
 1. **Detect.** Rules with checksum validation run over the whole text. GLiNER runs over overlapping windows cut at sentence ends, so long documents work and full names come out as one span.
 2. **Resolve.** Duplicate and window-split detections of the same category are merged. Cross-category overlaps are resolved by policy priority, and the winner grows to the union so no fragment leaks.
 3. **Decide.** Each span gets an action from the policy: `mask`, `keep` (exceptions) or `review`. Low-confidence spans follow the category's `on_doubt` rule.
-4. **Apply.** Placeholders are substituted on the original text. Accents, emojis, line breaks and everything outside the spans stay untouched. Offsets are Unicode code points.
+4. **Apply.** Placeholders (or reversible tokens) are substituted on the original text. Accents, emojis, line breaks and everything outside the spans stay untouched. Offsets are Unicode code points.
 
 More detail: [docs/architecture.md](docs/architecture.md).
 
@@ -163,6 +179,7 @@ history, documents and tool payloads are masked and that every failure mode bloc
 - **Text only.** Images, documents and attachments are blocked on protected routes by design.
 - **Over-masking.** Policy `brain-external-es@3` masks doubtful names and addresses instead of blocking. GLiNER sometimes tags role nouns or boilerplate at the start of a sentence ("El arrendatario", "El presente documento") as `PERSONA`. Safe, but it removes some context.
 - **Not a compliance certificate.** BrainGate applies the policy you define. Whether that policy is adequate for your data (GDPR, sector rules) is for whoever owns and approves the policy.
+- **No streaming restore.** Reversible tokens are restored on complete responses only. If the model alters a token, it is left visible rather than guessed.
 - **Masked search.** Searching by exact name or ID in a masked index won't match. Use a restricted local lookup on the originals with document permissions (see [architecture](docs/architecture.md#exact-identifier-lookup)).
 
 ## Roadmap

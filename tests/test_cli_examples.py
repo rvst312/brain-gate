@@ -60,3 +60,13 @@ def test_example_index_masking():
     index_part = out.split("Buscar")[0]
     for v in RULE_PII:
         assert v not in index_part, v
+
+
+@pytest.mark.slow
+def test_example_reversible_chat():
+    out = run_example("04_reversible_chat.py")
+    sent, restored = out.split("Lo que recibe el proveedor externo:")[1].split("Respuesta reconstruida")
+    for v in RULE_PII[:4]:
+        assert v not in sent, v
+    assert "[DNI_" in sent and "[EMAIL_" in sent and "IBAN [IBAN]" in sent
+    assert '"to": "maria.lopez@example.com"' in restored and "DNI 12345678Z" in restored and "_" not in restored.split("\n", 1)[1].replace("tool_use", "").replace("enviar_correo", "")

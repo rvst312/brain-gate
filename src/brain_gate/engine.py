@@ -10,6 +10,7 @@ from typing import Protocol
 
 from .policy import Action, Policy
 from .spans import Span
+from .vault import Vault
 
 
 class Detector(Protocol):
@@ -100,14 +101,19 @@ def decide(span: Span, text: str, policy: Policy) -> Action:
     return rule.action
 
 
-def apply(text: str, decisions: list[Decision], policy: Policy) -> str:
+def apply(text: str, decisions: list[Decision], policy: Policy, vault: Vault | None = None) -> str:
+    """Con ``vault``, las categorías reversibles de la política reciben un token único
+    reconstruible; el resto, su placeholder fijo."""
     parts: list[str] = []
     cursor = 0
     for d in sorted(decisions, key=lambda d: d.span.start):
         if d.action is not Action.MASK:
             continue
         parts.append(text[cursor:d.span.start])
-        parts.append(policy.placeholder(d.span.category))
+        if vault is not None and policy.is_reversible(d.span.category):
+            parts.append(vault.token(d.span.category, text[d.span.start:d.span.end]))
+        else:
+            parts.append(policy.placeholder(d.span.category))
         cursor = d.span.end
     parts.append(text[cursor:])
     return "".join(parts)
@@ -120,7 +126,7 @@ class Engine:
         self.detectors = detectors
         self.detector_version = "+".join(d.version for d in detectors)
 
-    def mask(self, text: str, policy: Policy) -> MaskResult:
+    def mask(self, text: str, policy: Policy, vault: Vault | None = None) -> MaskResult:
         t0 = time.perf_counter()
         raw: list[Span] = []
         for det in self.detectors:
@@ -131,7 +137,7 @@ class Engine:
         counts = Counter(f"{d.span.category}:{d.action.value}" for d in decisions)
         return MaskResult(
             status=Status.NEEDS_REVIEW if needs_review else Status.MASKED,
-            masked_text=None if needs_review else apply(text, decisions, policy),
+            masked_text=None if needs_review else apply(text, decisions, policy, vault),
             decisions=decisions,
             policy_version=policy.ref,
             detector_version=self.detector_version,
