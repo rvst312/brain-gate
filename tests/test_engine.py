@@ -1,3 +1,5 @@
+import re
+
 from brain_gate.contextual import GlinerDetector, make_windows
 from brain_gate.engine import Engine, Status, merge_same_category, resolve_overlaps
 from brain_gate.policy import Action, CategoryRule
@@ -107,3 +109,44 @@ def test_long_text_offsets_recomposed(policy):
     r = Engine([RuleDetector(), GlinerDetector(model, LABELS, window_size=400, window_overlap=80)]).mask(text, policy)
     assert r.masked_text.endswith("Contactar con [PERSONA] en [EMAIL].")
     assert len(model.calls) > 1
+
+
+# ---- tokens reversibles
+
+def test_reversible_tokens_distinguish_and_repeat(engine, policies):
+    from brain_gate.vault import Vault
+    policy = policies.get("brain-external-es-reversible")
+    vault = Vault(b"k")
+    text = ("María López escribió a José Ángel Núñez. María López tiene DNI 12345678Z "
+            "e IBAN ES91 2100 0418 4502 0005 1332.")
+    r = engine.mask(text, policy, vault)
+    assert r.status is Status.MASKED
+    personas = re.findall(r"\[PERSONA_[0-9a-f]{10}\]", r.masked_text)
+    assert len(personas) == 3 and personas[0] == personas[2] != personas[1]
+    assert re.search(r"DNI \[DNI_[0-9a-f]{10}\]", r.masked_text)
+    # Categoría marcada como no reversible: placeholder fijo y fuera de la tabla.
+    assert "[IBAN]" in r.masked_text and "ES91" not in "".join(vault.mappings().values())
+    for v in ("María López", "José Ángel Núñez", "12345678Z", "ES91"):
+        assert v not in r.masked_text
+    restored, n = vault.restore(r.masked_text)
+    assert n == 4 and restored == text.replace("ES91 2100 0418 4502 0005 1332", "[IBAN]")
+
+
+def test_vault_ignored_unless_policy_is_reversible(engine, policy):
+    from brain_gate.vault import Vault
+    vault = Vault(b"k")
+    text = "María López, DNI 12345678Z"
+    assert engine.mask(text, policy, vault).masked_text == engine.mask(text, policy).masked_text == "[PERSONA], DNI [DNI]"
+    assert len(vault) == 0
+
+
+def test_reversible_policy_without_vault_uses_placeholders(engine, policies):
+    r = engine.mask("María López", policies.get("brain-external-es-reversible"))
+    assert r.masked_text == "[PERSONA]"
+
+
+def test_needs_review_registers_nothing(engine, policies):
+    from brain_gate.vault import Vault
+    vault = Vault(b"k")
+    r = engine.mask("María López, DNI 12345678A", policies.get("brain-external-es-reversible"), vault)
+    assert r.status is Status.NEEDS_REVIEW and r.masked_text is None and len(vault) == 0

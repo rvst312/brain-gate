@@ -30,6 +30,7 @@ campos están procesados. Si hay dudas que la política manda revisar, un fallo 
 - **Inferencia 100 % local.** Los pesos se cargan desde disco con la red desactivada.
 - **Pensado para documentos en español.** DNI, NIE e IBAN con dígito de control, teléfonos españoles y correos. Nombres y direcciones con [GLiNER Multi PII](https://huggingface.co/urchade/gliner_multi_pii-v1).
 - **Pasarela que falla cerrada.** Enmascara sistema, historial, contexto recuperado, llamadas y resultados de herramientas conservando la estructura. Si hay revisión pendiente, el detector cae, se agota el tiempo o llega un adjunto o un campo desconocido, la solicitud se bloquea.
+- **Reconstrucción del dato.** Opcionalmente salen tokens únicos con clave (`[DNI_3b1e2db644]`) en lugar de marcadores fijos y la respuesta del proveedor vuelve con los valores reales. La tabla de equivalencias vive en memoria durante una petición.
 - **Políticas versionadas.** Categorías, marcadores, umbrales, excepciones, prioridad y tratamiento de dudas son configuración. Cada resultado registra `policy_version` y `detector_version`.
 - **Logs sin contenido.** Solo latencias, tamaños, recuentos y versiones. Los errores nunca devuelven el texto.
 - **Tres formas de uso.** Biblioteca Python, API privada (`POST /v1/mask`) o CLI.
@@ -56,6 +57,7 @@ Sin modelo: `uv run braingate mask --gliner none "..."` usa solo reglas.
 | [`01_rag_chat_egress.py`](examples/01_rag_chat_egress.py) | Un asistente RAG llama a un LLM externo. Se enmascaran contexto, historial y herramientas. Con un adjunto, la solicitud se bloquea sin llamar al proveedor. |
 | [`02_index_masking.py`](examples/02_index_masking.py) | Indexación ofuscada: texto y títulos enmascarados, referencia opaca, versiones registradas y cola de revisión para un DNI con letra incorrecta. |
 | [`03_http_service.sh`](examples/03_http_service.sh) | Servicio HTTP privado con token por integración y permiso por política. |
+| [`04_reversible_chat.py`](examples/04_reversible_chat.py) | Reconstrucción del dato: el modelo recibe tokens únicos (`[DNI_3b1e2db644]`) y la respuesta vuelve con los valores reales, también en las llamadas a herramientas. |
 
 ```bash
 uv run python examples/01_rag_chat_egress.py
@@ -66,7 +68,7 @@ uv run python examples/01_rag_chat_egress.py
 1. **Detectar.** Reglas con validación de dígitos de control y GLiNER sobre ventanas solapadas cortadas en fin de frase.
 2. **Resolver.** Se unen los duplicados de la misma categoría, también los partidos entre ventanas. Entre categorías gana la de mayor prioridad, extendida a la unión para que no escape ningún resto.
 3. **Decidir.** La política asigna `mask`, `keep` (excepciones) o `review`. Las detecciones dudosas siguen el `on_doubt` de su categoría.
-4. **Aplicar.** Se sustituye sobre el original y se conserva todo lo demás (tildes, emojis, saltos de línea). Las posiciones son puntos de código Unicode.
+4. **Aplicar.** Se sustituye sobre el original (por un marcador fijo o, si la categoría es reversible en la política, por un token único que permite reconstruir el dato en la respuesta) y se conserva todo lo demás (tildes, emojis, saltos de línea). Las posiciones son puntos de código Unicode.
 
 Detalle completo en [docs/architecture.md](docs/architecture.md).
 
@@ -84,6 +86,7 @@ ejecutan si los pesos están en `models/` y comprueban que la carga no abre ning
 ## Limitaciones
 
 - Solo texto. Los adjuntos se bloquean.
+- La reconstrucción del dato funciona sobre respuestas completas, no en streaming. Un token que el modelo altere se deja visible; nunca se sustituye por un dato equivocado.
 - La política de ejemplo enmascara nombres y direcciones dudosos: a veces se enmascara una palabra que no es un dato personal («El arrendatario»).
 - BrainGate aplica la política que definas. La adecuación al RGPD u otra normativa corresponde a quien define y aprueba la política.
 

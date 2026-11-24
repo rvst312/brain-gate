@@ -53,7 +53,26 @@ doesn't know are blocked rather than forwarded unmasked, so add new fields to `g
 Both return `masked`, `needs_review` or `error`, and the gateway blocks on anything but `masked`.
 `HttpMasker` treats any unexpected HTTP status or body as an error.
 
-## 4. Test against a mock first
+## 4. Get real values back (optional)
+
+Map the brain to a policy with [reversible categories](policies.md#reversible-tokens) and the gateway does the rest:
+the provider sees `[PERSONA_5c0e9a41d7]`, and `result.response` comes back with the original values in text and in
+tool-call arguments. `result.restored` is the number of tokens replaced.
+
+```python
+gateway = Gateway(integration_id, masker, providers={"llm": provider},
+                  policy_map={("my-brain", "llm"): "brain-external-es-reversible"},
+                  token_key=KEY)   # optional: same tokens across processes and restarts
+```
+
+- Keep sending the **restored** history on the next turn. It is masked again and, with the same key, gets the same tokens.
+- With `HttpMasker` the key is the service's `BRAIN_GATE_TOKEN_KEY`; the gateway's `token_key` is not used.
+- Your provider must return the complete response as a dict. Streaming is not restored.
+- `restore=False` turns the feature off for a gateway regardless of the policy.
+
+See `examples/04_reversible_chat.py`.
+
+## 5. Test against a mock first
 
 ```python
 from brain_gate import MockProvider
@@ -65,7 +84,7 @@ assert "12345678Z" not in str(provider.sent)
 `tests/test_gateway.py` is a template: PII injected through history, documents and tools, plus detector down,
 timeout, review and unsupported fields, each asserting that `provider.sent` stays empty.
 
-## 5. Index-time masking
+## 6. Index-time masking
 
 Mask before chunking and before computing embeddings, store an opaque document reference, and mask titles and
 paths as well. See `examples/02_index_masking.py`. Re-process by document version so retries replace chunks

@@ -17,6 +17,7 @@ uv run braingate serve --host 127.0.0.1 --port 8088      # uses models/ automati
 | `BRAIN_GATE_POLICY_DIR` | built-in | Directory of policy JSON files. |
 | `BRAIN_GATE_MAX_CONCURRENCY` | `4` | Concurrent inferences per process. |
 | `BRAIN_GATE_TIMEOUT_S` | `5` | Per-request processing timeout. |
+| `BRAIN_GATE_TOKEN_KEY` | random per process | Key for reversible tokens. Set it to get the same tokens across restarts and workers. Treat it as a secret. |
 
 ## `POST /v1/mask`
 
@@ -48,6 +49,29 @@ code points, `start` inclusive and `end` exclusive. No detected text is ever ret
 "spans": [ {"start": 0, "end": 11, "category": "PERSONA", "action": "mask"},
            {"start": 39, "end": 56, "category": "EMAIL", "action": "mask"} ]
 ```
+
+### Reversible tokens
+
+With `"reversible": true`, categories the policy marks as [reversible](policies.md#reversible-tokens) are replaced by
+unique tokens and the response adds `mappings`, the table needed to rebuild the data:
+
+```json
+{ "text": "María López pidió que le escribieran a maria@example.com",
+  "policy_id": "brain-external-es-reversible", "reversible": true }
+```
+
+```json
+{ "status": "masked",
+  "masked_text": "[PERSONA_5c0e9a41d7] pidió que le escribieran a [EMAIL_bb25739858]",
+  "mappings": { "[PERSONA_5c0e9a41d7]": "María López", "[EMAIL_bb25739858]": "maria@example.com" },
+  "policy_version": "brain-external-es-reversible@1",
+  "detector_version": "rules@1+gliner-pii@1" }
+```
+
+`mappings` contains only fragments of the text the caller just sent, and only when requested. The service stores
+nothing: keep the table in memory for the duration of your request and replace the tokens in the provider's answer.
+`HttpMasker` and the gateway do this for you. `mappings` is `{}` when the policy has no reversible categories, and is
+omitted on `needs_review`. It never appears in logs or errors.
 
 ### `200 needs_review`
 

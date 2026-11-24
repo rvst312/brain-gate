@@ -29,6 +29,7 @@ src/brain_gate/
 ├── policy.py       Versioned policy model + store (built-in policies in policies/)
 ├── api.py          FastAPI app: POST /v1/mask, /readyz, /healthz
 ├── gateway.py      Egress gateway, request walkers, maskers (local / HTTP), MockProvider
+├── vault.py        Reversible tokens: per-request table token → original, response restore
 ├── telemetry.py    Whitelisted, content-free structured logs
 ├── models.py       Pinned weight download (the only code that touches the network)
 └── cli.py          braingate mask | serve | download-model
@@ -74,6 +75,8 @@ unit tests exercise windowing without weights.
 For each span: literal exception → `keep`; category action `keep` → `keep`; `score < min_score` → `on_doubt`
 (category first, then policy); otherwise the category action. If any span is `review`, the result is
 `needs_review` and **no text is returned**. Otherwise placeholders replace the masked spans in the original string.
+When the caller passes a `Vault` and the policy marks the category `reversible`, the span is replaced by a unique
+token instead (see [Data reconstruction](#data-reconstruction-vaultpy)).
 
 ## Egress gateway (`gateway.py`)
 
@@ -93,10 +96,34 @@ result = gateway.send(brain="my-brain", destination="llm", route="chat", request
 | Block reason | Cause |
 |---|---|
 | `needs_review` | Policy requires review for some span |
-| `detector_failure`, `masker_unreachable`, `timeout`, `processing_error` | Masker problems |
+| `detector_failure`, `masker_unreachable`, `timeout`, `processing_error`, `invalid_mappings` | Masker problems |
 | `too_large` | Field over `policy.max_chars` or request over `max_request_chars` |
 | `unsupported_part`, `unsupported_field`, `unsupported_message`, `unsupported_content`, `unsupported_input`, `unsupported_route`, `missing_messages` | Format with no defined treatment |
 | `no_policy`, `unknown_destination`, `policy_forbidden` | Configuration / permission |
+
+## Data reconstruction (`vault.py`)
+
+```
+"Escribe a maria@example.com"  ──mask──►  "Escribe a [EMAIL_bb25739858]"  ──►  LLM
+                                   │ Vault (memory, this request only)
+"Enviado a maria@example.com"  ◄─restore─  "Enviado a [EMAIL_bb25739858]"  ◄──  LLM
+```
+
+- **Token.** `[CATEGORY_<10 hex>]`, where the hex is `HMAC-SHA256(key, category + "\0" + normalized value)`. Keyed, so
+  low-entropy identifiers cannot be brute-forced; deterministic, so the same value gets the same token in every
+  field and every turn (history that is re-masked on each request stays coherent and provider-side prompt caching
+  keeps working). On a collision between two different values the token grows by two hex digits.
+- **Scope.** `Gateway.send` creates one `Vault` per `chat` request, passes it to every masker call, restores the
+  response and drops it. Nothing is written to disk, logs or telemetry (only the `restored` count is logged).
+  The key lives for the lifetime of the `Gateway` (random unless `token_key` is given).
+- **Restore.** Every string leaf of the provider response is scanned, including tool-call arguments, so local tools
+  receive real values. Tokens are matched with brackets or bare (`EMAIL_bb25739858`, for models that drop them).
+  A token the table doesn't know, or one the model altered, is left as is: the output shows a token, never a wrong value.
+- **HTTP masker.** The service stays stateless: it returns `mappings` per call and `HttpMasker` merges them into the
+  request's vault. Missing or malformed mappings, or a token arriving with two different values, block the request
+  (`invalid_mappings`).
+- **Not covered.** Streaming responses (a token can be split across chunks), persistent tables, and restoring
+  embeddings or index content: those keep fixed placeholders.
 
 ## Exact-identifier lookup
 
@@ -109,5 +136,5 @@ opaque internal reference is enough (see `examples/02_index_masking.py`).
 
 - The model loads **once per process**. `/readyz` returns 503 until it is ready. If `BRAIN_GATE_GLINER_PATH` is set and loading fails, the service does not become ready: there is no silent fallback to rules only.
 - Limits: `policy.max_chars`, `BRAIN_GATE_MAX_CONCURRENCY` (4), `BRAIN_GATE_TIMEOUT_S` (5). Chat runs synchronously. Use a resumable batch job for re-indexing.
-- Logs contain `event, integration, brain, destination, policy_version, detector_version, status, reason, elapsed_ms, chars, fields, counts`, and nothing else. `telemetry.emit` raises on any other field.
+- Logs contain `event, integration, brain, destination, policy_version, detector_version, status, reason, elapsed_ms, chars, fields, counts, restored`, and nothing else. `telemetry.emit` raises on any other field.
 - FastAPI's default 422 handler echoes the request body. BrainGate replaces it, and the 500 handler, with bodies that never contain input.

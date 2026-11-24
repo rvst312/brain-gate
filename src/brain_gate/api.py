@@ -12,6 +12,8 @@ Configuración por variables de entorno:
 - ``BRAIN_GATE_GLINER_THRESHOLD`` (0.4): corte del detector. Entre este valor y el
   ``min_score`` de la política la detección es dudosa y se aplica ``on_doubt``.
 - ``BRAIN_GATE_MAX_CONCURRENCY`` (4), ``BRAIN_GATE_TIMEOUT_S`` (5).
+- ``BRAIN_GATE_TOKEN_KEY``: clave de los tokens reversibles. Si falta se genera una
+  aleatoria por proceso (los tokens cambian en cada arranque).
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -35,6 +38,7 @@ from .contextual import GlinerDetector
 from .engine import Engine, MaskResult, Status
 from .policy import PolicyStore
 from .rules import RuleDetector
+from .vault import Vault
 
 GLINER_LABELS = {
     "person": "PERSONA",
@@ -49,6 +53,8 @@ class MaskRequest(BaseModel):
     text: str
     policy_id: str
     include_spans: bool = False
+    # Tokens únicos para las categorías reversibles de la política y tabla ``mappings`` en la respuesta.
+    reversible: bool = False
 
 
 @dataclass
@@ -65,6 +71,7 @@ class ServiceState:
     integrations: dict[str, Integration] = field(default_factory=dict)
     semaphore: asyncio.Semaphore | None = None
     timeout_s: float = 5.0
+    token_key: bytes = b""
     ready: bool = False
 
     def authenticate(self, authorization: str | None) -> Integration | None:
@@ -109,6 +116,7 @@ def create_app(
     integrations: dict[str, Integration] | None = None,
     max_concurrency: int | None = None,
     timeout_s: float | None = None,
+    token_key: bytes | None = None,
 ) -> FastAPI:
     state = ServiceState()
 
@@ -120,6 +128,8 @@ def create_app(
             os.environ.get("BRAIN_GATE_INTEGRATIONS"))
         state.semaphore = asyncio.Semaphore(max_concurrency or int(os.environ.get("BRAIN_GATE_MAX_CONCURRENCY", "4")))
         state.timeout_s = timeout_s or float(os.environ.get("BRAIN_GATE_TIMEOUT_S", "5"))
+        env_key = os.environ.get("BRAIN_GATE_TOKEN_KEY")
+        state.token_key = token_key or (env_key.encode() if env_key else secrets.token_bytes(32))
         state.engine = engine or await asyncio.to_thread(build_default_engine)
         state.ready = True
         yield
@@ -167,10 +177,11 @@ def create_app(
                            reason="too_large", chars=len(req.text))
             return _error(413, "too_large")
 
+        vault = Vault(state.token_key) if req.reversible else None
         try:
             async with state.semaphore:
                 result: MaskResult = await asyncio.wait_for(
-                    asyncio.to_thread(state.engine.mask, req.text, policy), state.timeout_s)
+                    asyncio.to_thread(state.engine.mask, req.text, policy, vault), state.timeout_s)
         except TimeoutError:
             telemetry.emit("mask", integration=integ.id, policy_version=policy.ref, status="error",
                            reason="timeout", chars=len(req.text))
@@ -191,6 +202,9 @@ def create_app(
         }
         if result.status is Status.MASKED:
             body["masked_text"] = result.masked_text
+            if vault is not None:
+                # Solo fragmentos del texto que el propio llamante envió, y solo si lo pide.
+                body["mappings"] = vault.mappings()
         if req.include_spans:
             body["spans"] = [
                 {"start": d.span.start, "end": d.span.end, "category": d.span.category, "action": d.action.value}

@@ -6,11 +6,16 @@ embeddings), conserva la estructura y solo envía cuando todo el procesamiento
 ha terminado con ``masked``. Ante revisión pendiente, fallo, formato sin
 soporte, límite excedido o política no configurada bloquea la salida y
 devuelve un estado controlado sin llamar al proveedor.
+
+Si la política marca categorías como reversibles, esos datos salen como tokens
+únicos y la respuesta del proveedor se reconstruye con los valores originales
+antes de devolverla (ruta ``chat``).
 """
 
 from __future__ import annotations
 
 import copy
+import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -20,6 +25,7 @@ import httpx
 from . import telemetry
 from .engine import Engine, Status
 from .policy import PolicyStore
+from .vault import Vault
 
 
 # --------------------------------------------------------------------------- maskers
@@ -32,7 +38,9 @@ class MaskOutcome:
 
 
 class Masker(Protocol):
-    def mask(self, text: str, policy_id: str) -> MaskOutcome: ...
+    """Con ``vault``, las categorías reversibles salen como tokens y la tabla queda en él."""
+
+    def mask(self, text: str, policy_id: str, vault: Vault | None = None) -> MaskOutcome: ...
 
 
 class LocalMasker:
@@ -41,14 +49,14 @@ class LocalMasker:
     def __init__(self, engine: Engine, policies: PolicyStore, allowed_policies: set[str]) -> None:
         self.engine, self.policies, self.allowed = engine, policies, allowed_policies
 
-    def mask(self, text: str, policy_id: str) -> MaskOutcome:
+    def mask(self, text: str, policy_id: str, vault: Vault | None = None) -> MaskOutcome:
         policy = self.policies.get(policy_id)
         if policy is None or policy_id not in self.allowed:
             return MaskOutcome("error", error="policy_forbidden")
         if len(text) > policy.max_chars:
             return MaskOutcome("error", error="too_large")
         try:
-            r = self.engine.mask(text, policy)
+            r = self.engine.mask(text, policy, vault)
         except Exception:
             return MaskOutcome("error", error="detector_failure")
         if r.status is Status.MASKED:
@@ -64,14 +72,22 @@ class HttpMasker:
         self.client = client or httpx.Client(base_url=base_url, timeout=timeout_s)
         self.headers = {"Authorization": f"Bearer {token}"}
 
-    def mask(self, text: str, policy_id: str) -> MaskOutcome:
+    def mask(self, text: str, policy_id: str, vault: Vault | None = None) -> MaskOutcome:
+        payload: dict[str, Any] = {"text": text, "policy_id": policy_id}
+        if vault is not None:
+            payload["reversible"] = True
         try:
-            resp = self.client.post("/v1/mask", json={"text": text, "policy_id": policy_id},
-                                    headers=self.headers)
+            resp = self.client.post("/v1/mask", json=payload, headers=self.headers)
             body = resp.json()
         except Exception:
             return MaskOutcome("error", error="masker_unreachable")
         if resp.status_code == 200 and body.get("status") == "masked" and isinstance(body.get("masked_text"), str):
+            if vault is not None:
+                # Sin tabla válida no se podría reconstruir: se bloquea antes que enviar.
+                try:
+                    vault.merge(body["mappings"])
+                except Exception:
+                    return MaskOutcome("error", error="invalid_mappings")
             return MaskOutcome("masked", body["masked_text"])
         if resp.status_code == 200 and body.get("status") == "needs_review":
             return MaskOutcome("needs_review")
@@ -201,6 +217,7 @@ class GatewayResult:
     reason: str | None = None
     response: dict[str, Any] | None = None
     policy_id: str | None = None
+    restored: int = 0  # tokens de la respuesta sustituidos por su dato original
 
 
 class Gateway:
@@ -211,12 +228,18 @@ class Gateway:
         providers: dict[str, Provider],
         policy_map: dict[tuple[str, str], str],  # (cerebro, destino) -> policy_id
         max_request_chars: int = 200_000,
+        token_key: bytes | None = None,
+        restore: bool = True,
     ) -> None:
         self.integration_id = integration_id
         self.masker = masker
         self.providers = providers
         self.policy_map = policy_map
         self.max_request_chars = max_request_chars
+        # Clave de los tokens reversibles. Estable durante la vida del gateway: el mismo
+        # dato recibe el mismo token en todos los turnos de una conversación.
+        self.token_key = token_key or secrets.token_bytes(32)
+        self.restore = restore
 
     def _blocked(self, brain: str, destination: str, reason: str, policy_id: str | None = None,
                  **extra: Any) -> GatewayResult:
@@ -244,9 +267,13 @@ class Gateway:
         if total > self.max_request_chars:
             return self._blocked(brain, destination, "too_large", policy_id, chars=total)
 
+        # Tabla de equivalencias de esta petición: en memoria y descartada al terminar.
+        # Los embeddings no devuelven texto que reconstruir y conservan el placeholder fijo.
+        vault = Vault(self.token_key) if self.restore and route == "chat" else None
+
         out = copy.deepcopy(request)
         for p in paths:
-            outcome = self.masker.mask(_get(request, p), policy_id)
+            outcome = self.masker.mask(_get(request, p), policy_id, vault)
             if outcome.status == "needs_review":
                 return self._blocked(brain, destination, "needs_review", policy_id, fields=len(paths))
             if outcome.status != "masked" or outcome.masked_text is None:
@@ -255,7 +282,10 @@ class Gateway:
 
         # Solo aquí, con todo procesado, se produce la salida externa.
         response = provider.send(route, out)
+        restored = 0
+        if vault is not None and len(vault):
+            response, restored = vault.restore_obj(response)
         telemetry.emit("gateway", integration=self.integration_id, brain=brain, destination=destination,
-                       status="sent", fields=len(paths), chars=total,
+                       status="sent", fields=len(paths), chars=total, restored=restored,
                        elapsed_ms=round((time.perf_counter() - t0) * 1000, 2))
-        return GatewayResult("sent", response=response, policy_id=policy_id)
+        return GatewayResult("sent", response=response, policy_id=policy_id, restored=restored)

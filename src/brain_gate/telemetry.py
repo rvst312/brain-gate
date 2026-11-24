@@ -13,7 +13,7 @@ log = logging.getLogger("brain_gate")
 
 _ALLOWED = {
     "event", "integration", "brain", "destination", "policy_version", "detector_version",
-    "status", "reason", "elapsed_ms", "chars", "fields", "counts", "http_status",
+    "status", "reason", "elapsed_ms", "chars", "fields", "counts", "http_status", "restored",
 }
 
 
